@@ -77,8 +77,8 @@ public class MulticastPeer implements AutoCloseable {
                 }
 
             } catch (IOException e) {
-                Thread.currentThread().interrupt();
                 log.error(e);
+                Thread.currentThread().interrupt();
             }
         }, executor);
     }
