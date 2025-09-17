@@ -6,6 +6,8 @@ import org.apache.logging.log4j.Logger;
 import java.io.IOException;
 import java.net.*;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,12 +21,12 @@ public class MulticastPeer implements AutoCloseable {
     private final InetAddress group;
     private final Integer port;
     private final ConcurrentHashMap<String, LocalDateTime> peers = new ConcurrentHashMap<>();
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService executor = Executors.newFixedThreadPool(3);
     private final long appId = new Random().nextLong();
 
     @Override
     public void close() {
-        executor.shutdownNow();
+        executor.shutdown();
         byte[] buf = (MSG + appId + "BYE").getBytes();
         DatagramPacket packet = new DatagramPacket(buf, buf.length, group, port);
         try {
@@ -50,6 +52,7 @@ public class MulticastPeer implements AutoCloseable {
     public void initThreads() {
         startSender();
         startReceiver();
+        startChecker();
     }
 
     private void startReceiver() {
@@ -93,6 +96,25 @@ public class MulticastPeer implements AutoCloseable {
                     Thread.sleep(3000);
                 }
             } catch (IOException | InterruptedException e) {
+                log.error(e);
+                Thread.currentThread().interrupt();
+            }
+        }, executor);
+    }
+
+    private void startChecker() {
+        CompletableFuture.runAsync(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    for (Map.Entry<String, LocalDateTime> peer : peers.entrySet()) {
+                        if (ChronoUnit.SECONDS.between(LocalDateTime.now(), peer.getValue()) > 5) {
+                            peers.remove(peer.getKey());
+                            System.out.println(peers);
+                        }
+                    }
+                    Thread.sleep(3000);
+                }
+            } catch (InterruptedException e) {
                 log.error(e);
                 Thread.currentThread().interrupt();
             }
