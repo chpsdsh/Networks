@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: tcp-transferring
+
+socket:
+  host: "localhost"
+  port: 8080
+
+file:
+  path: "."
