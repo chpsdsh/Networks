@@ -4,7 +4,7 @@ spring:
 
 socket:
   host: "localhost"
-  port: 8080
+  port: 6666
 
 file:
-  path: "."
+  path: "test.txt"

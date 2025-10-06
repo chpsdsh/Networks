@@ -17,7 +17,7 @@ public class Server implements AutoCloseable {
         serverSocket.close();
     }
 
-    public Server(@Value("${server.port}") int port) throws IOException {
+    public Server(@Value("${socket.port}") int port) throws IOException {
         serverSocket = new ServerSocket(port);
     }
 
