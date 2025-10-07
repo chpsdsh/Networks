@@ -2,6 +2,7 @@ package ru.nsu.fit.tcptransferring.client;
 
 
 import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Component;
@@ -9,9 +10,8 @@ import org.springframework.stereotype.Component;
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 
+@Slf4j
 @Component
 public class Client {
     private final Resource fileRes;
@@ -19,7 +19,7 @@ public class Client {
     private final int port;
 
 
-    public Client(@Value("${file.path}") Resource fileRes, @Value("${socket.host}") String host, @Value("${socket.port}") int port) throws IOException {
+    public Client(@Value("${file.path}") Resource fileRes, @Value("${socket.host}") String host, @Value("${socket.port}") int port) {
         this.fileRes = fileRes;
         this.host = host;
         this.port = port;
@@ -29,9 +29,26 @@ public class Client {
     public void init() throws IOException {
         try (Socket socket = new Socket(host, port);
              InputStream fin = new BufferedInputStream(fileRes.getInputStream());
-             BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())) {
+             BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream());
+             InputStream in = new BufferedInputStream(socket.getInputStream())
+        ) {
             sendFileName(out);
             sendFile(out, fin);
+            validateResult(in);
+        }
+    }
+
+    private static void validateResult(InputStream in) throws IOException {
+        int res = in.read();
+        switch (res) {
+            case 0:
+                log.info("Sending finished successfully");
+                break;
+            case 1:
+                log.info("Sending finished with failure");
+                break;
+            default:
+                break;
         }
     }
 

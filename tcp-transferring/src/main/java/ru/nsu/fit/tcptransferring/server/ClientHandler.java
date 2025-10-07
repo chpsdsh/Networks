@@ -30,10 +30,8 @@ public class ClientHandler {
     public void run() throws IOException {
             while (!Thread.currentThread().isInterrupted()) {
                 Socket clientSocket = server.getServerSocket().accept();
-                Loader loader = new Loader(clientSocket);
-                executor.execute(loader);
+                executor.execute(new Loader(clientSocket));
             }
-
     }
 
 }
