@@ -27,11 +27,11 @@ public class Client {
 
     @PostConstruct
     public void init() throws IOException {
-        try (Socket socket = new Socket(host, port)) {
-            InputStream fin = new BufferedInputStream(fileRes.getInputStream());
-            BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream());
+        try (Socket socket = new Socket(host, port);
+             InputStream fin = new BufferedInputStream(fileRes.getInputStream());
+             BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())) {
             sendFileName(out);
-            sendFile(out,fin);
+            sendFile(out, fin);
         }
     }
 
@@ -41,6 +41,17 @@ public class Client {
         byte[] leFileNameLength = intToLE(fileNameBytes.length);
         out.write(leFileNameLength, 0, leFileNameLength.length);
         out.write(fileNameBytes, 0, fileNameBytes.length);
+        out.flush();
+    }
+
+    private void sendFile(BufferedOutputStream out, InputStream fin) throws IOException {
+        byte[] fileLengthBytes = longToLE(fileRes.contentLength());
+        out.write(fileLengthBytes, 0, fileLengthBytes.length);
+        byte[] buf = new byte[64 * 1024];
+        int read;
+        while ((read = fin.read(buf)) != -1) {
+            out.write(buf, 0, read);
+        }
         out.flush();
     }
 
@@ -58,17 +69,6 @@ public class Client {
             longLE[i] = (byte) (a >>> 8 * i);
         }
         return longLE;
-    }
-
-    private void sendFile(BufferedOutputStream out, InputStream fin) throws IOException {
-        byte[] fileLengthBytes = longToLE(fileRes.contentLength());
-        out.write(fileLengthBytes, 0, fileLengthBytes.length);
-        byte[] buf = new byte[64 * 1024];
-        int read;
-        while ((read = fin.read(buf)) != -1) {
-            out.write(buf, 0, read);
-        }
-        out.flush();
     }
 }
 
