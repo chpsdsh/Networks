@@ -1,30 +1,28 @@
 package ru.nsu.fit.tcptransferring.server;
 
-
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
 public class Loader implements Runnable {
     private final Socket socket;
-    private final ExecutorService executor;
+    private final ScheduledExecutorService executor;
     private final AtomicLong totalReceived = new AtomicLong(0);
     private final AtomicLong currentReceived = new AtomicLong(0);
     private static final int INTERVAL_MILLIS = 3000;
     private static final double MILLIS_TO_SECONDS = 1000.0;
     private long startTime;
+    private ScheduledFuture<?> executorFuture ;
 
-    public Loader(Socket socket) {
+    public Loader(Socket socket, ScheduledExecutorService executor) {
         this.socket = socket;
-        this.executor = Executors.newSingleThreadExecutor();
+        this.executor = executor;
     }
 
     @Override
@@ -34,9 +32,10 @@ public class Loader implements Runnable {
             int nameLength = leBytesToInt(in);
             byte[] nameBuffer = readFully(in, nameLength);
             String name = new String(nameBuffer, StandardCharsets.UTF_8);
-            Path dir = Paths.get("uploads");
+            Path dir = Paths.get("src/main/java/ru/nsu/fit/tcptransferring/server/uploads");
             Files.createDirectories(dir);
-            Path file = dir.resolve(name);
+            Path fileName = Paths.get(name).getFileName();
+            Path file = dir.resolve(fileName);
             if (!Files.exists(file)) {
                 Files.createFile(file);
             }
@@ -44,15 +43,17 @@ public class Loader implements Runnable {
             readFileData(in, fileLength, file);
             calculateAndSendResult(out, fileLength, totalReceived.get());
             log.info("Finished loading");
-            closeAll();
         } catch (IOException e) {
             Thread.currentThread().interrupt();
+        } finally {
+            closeAll();
         }
     }
 
     private int leBytesToInt(InputStream in) throws IOException {
         byte[] b = in.readNBytes(Integer.BYTES);
         int res = 0;
+        if (b.length != Integer.BYTES) throw new EOFException("Not enough bytes for long");
         for (int i = 0; i < Integer.BYTES; i++) {
             res |= (b[i] & 0xFF) << (8 * i);
         }
@@ -81,9 +82,8 @@ public class Loader implements Runnable {
     }
 
     private void readFileData(InputStream in, long dataLength, Path path) throws IOException {
-        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(
-                path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING))) {
-            byte[] buf = new byte[1024 * 64];
+        try (OutputStream out = new BufferedOutputStream(Files.newOutputStream(path, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING))) {
+            byte[] buf = new byte[256];
             long remaining = dataLength;
             showMetrics();
             while (remaining > 0) {
@@ -114,23 +114,16 @@ public class Loader implements Runnable {
 
     private void showMetrics() {
         startTime = System.currentTimeMillis();
-        executor.execute(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
-                try {
-                    currentReceived.set(0);
-                    Thread.sleep(INTERVAL_MILLIS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                log.info("Total speed: " + (double) totalReceived.get() / (System.currentTimeMillis() - startTime) * MILLIS_TO_SECONDS);
-                log.info("Current speed: " + (double) currentReceived.get() / INTERVAL_MILLIS * MILLIS_TO_SECONDS);
-            }
-        });
+        executorFuture = executor.scheduleAtFixedRate(() -> {
+            log.info("Total speed: " + (double) totalReceived.get() / (System.currentTimeMillis() - startTime) * MILLIS_TO_SECONDS);
+            log.info("Current speed: " + (double) currentReceived.get() / INTERVAL_MILLIS * MILLIS_TO_SECONDS);
+        }, INTERVAL_MILLIS, INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
     }
 
-    private void closeAll() throws IOException {
-        socket.close();
-        executor.shutdownNow();
+    private void closeAll() {
+        if(executorFuture != null) {
+            executorFuture.cancel(true);
+        }
         if (totalReceived.get() != 0) {
             log.info("Final total speed:" + (double) totalReceived.get() / (System.currentTimeMillis() - startTime) * MILLIS_TO_SECONDS);
         }
