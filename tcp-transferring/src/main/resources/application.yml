@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: tcp-transferring
+
+socket:
+  host: "localhost"
+  port: 8092
+
+file:
+  path: "bigfile.txt"
