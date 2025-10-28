@@ -9,15 +9,15 @@ import (
 	"os"
 )
 
-func ReadGeoDataAsync(ctx context.Context, client *http.Client, query string) <-chan Result[[]domain.Location] {
-	out := make(chan Result[[]domain.Location], 1)
+func ReadGeoDataAsync(ctx context.Context, client *http.Client, query string) <-chan Result[domain.GeoResponse] {
+	out := make(chan Result[domain.GeoResponse], 1)
 	go func() {
 		defer close(out)
 
 		key := os.Getenv("GRAPHOPPER_KEY")
 		if key == "" {
 			select {
-			case out <- Result[[]domain.Location]{Err: fmt.Errorf("env var GRAPHOPPER_KEY not set")}:
+			case out <- Result[domain.GeoResponse]{Err: fmt.Errorf("env var GRAPHOPPER_KEY not set")}:
 			case <-ctx.Done():
 			}
 			return
@@ -31,7 +31,7 @@ func ReadGeoDataAsync(ctx context.Context, client *http.Client, query string) <-
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			select {
-			case out <- Result[[]domain.Location]{Err: fmt.Errorf("error creating request: %w", err)}:
+			case out <- Result[domain.GeoResponse]{Err: fmt.Errorf("error creating request: %w", err)}:
 			case <-ctx.Done():
 			}
 			return
@@ -39,23 +39,12 @@ func ReadGeoDataAsync(ctx context.Context, client *http.Client, query string) <-
 
 		var geoResponse domain.GeoResponse
 		if err := doJSON(client, req, &geoResponse); err != nil {
-			out <- Result[[]domain.Location]{Err: fmt.Errorf("error doing request: %w", err)}
+			out <- Result[domain.GeoResponse]{Err: fmt.Errorf("error doing request: %w", err)}
 			return
 		}
 
-		locs := make([]domain.Location, 0, len(geoResponse.Hits))
-
-		for _, h := range geoResponse.Hits {
-			locs = append(locs, domain.Location{
-				Name: h.Name,
-				Id:   h.OSMId,
-				Lat:  h.Point.Lat,
-				Lng:  h.Point.Lng,
-			})
-		}
-
 		select {
-		case out <- Result[[]domain.Location]{Value: locs}:
+		case out <- Result[domain.GeoResponse]{Value: geoResponse}:
 		case <-ctx.Done():
 			return
 		}
