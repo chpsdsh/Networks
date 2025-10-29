@@ -40,7 +40,14 @@ func (app Application) Run() error {
 	geoCtx, geoCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer geoCancel()
 	out := network.ReadGeoDataAsync(geoCtx, app.client, place)
-	locOut := <-out
+
+	var locOut utils.Result[domain.GeoResponse]
+	select {
+	case locOut = <-out:
+	case <-geoCtx.Done():
+		return geoCtx.Err()
+	}
+
 	if locOut.Err != nil {
 		return locOut.Err
 	}
