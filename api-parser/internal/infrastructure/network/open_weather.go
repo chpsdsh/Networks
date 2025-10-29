@@ -28,12 +28,18 @@ func ReadWeatherDataAsync(ctx context.Context, client *http.Client, Lat, Lng flo
 			Lat, Lng, key)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, q, nil)
 		if err != nil {
-			out <- utils.Result[domain.WeatherResponse]{Err: err}
+			select {
+			case out <- utils.Result[domain.WeatherResponse]{Err: err}:
+			case <-ctx.Done():
+			}
 			return
 		}
 		var weatherResp domain.WeatherResponse
 		if err := utils.DoJSON(client, req, &weatherResp); err != nil {
-			out <- utils.Result[domain.WeatherResponse]{Err: err}
+			select {
+			case out <- utils.Result[domain.WeatherResponse]{Err: err}:
+			case <-ctx.Done():
+			}
 			return
 		}
 

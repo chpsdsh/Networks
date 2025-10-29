@@ -40,7 +40,10 @@ func ReadGeoDataAsync(ctx context.Context, client *http.Client, query string) <-
 
 		var geoResponse domain.GeoResponse
 		if err := utils.DoJSON(client, req, &geoResponse); err != nil {
-			out <- utils.Result[domain.GeoResponse]{Err: fmt.Errorf("error doing request: %w", err)}
+			select {
+			case out <- utils.Result[domain.GeoResponse]{Err: fmt.Errorf("error doing request: %w", err)}:
+			case <-ctx.Done():
+			}
 			return
 		}
 
