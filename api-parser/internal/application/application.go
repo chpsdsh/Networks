@@ -4,15 +4,13 @@ import (
 	"api-parser/internal/domain"
 	"api-parser/internal/infrastructure/console"
 	"api-parser/internal/infrastructure/network"
+	"api-parser/internal/infrastructure/network/utils"
 	"context"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
 )
-
-const NumChannels = 2
 
 type Input interface {
 	InputData() (string, error)
@@ -38,9 +36,10 @@ func (app Application) Run() error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out := network.ReadGeoDataAsync(ctx, app.client, place)
+
+	geoCtx, geoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer geoCancel()
+	out := network.ReadGeoDataAsync(geoCtx, app.client, place)
 	locOut := <-out
 	if locOut.Err != nil {
 		return locOut.Err
@@ -76,7 +75,12 @@ func (app Application) getWeatherAndPlacesInfo(point domain.Point) error {
 	return nil
 }
 
-func (app Application) getResults(weatherOut <-chan network.Result[domain.WeatherResponse], interPlaces <-chan network.Result[[]domain.PlaceInfo], weatherCtx context.Context, placesInfoCtx context.Context) error {
+func (app Application) getResults(
+	weatherOut <-chan utils.Result[domain.WeatherResponse],
+	interPlaces <-chan utils.Result[[]domain.WikiGeoSearchAndPlaceInfo],
+	weatherCtx context.Context,
+	placesInfoCtx context.Context) error {
+
 	wch := weatherOut
 	pch := interPlaces
 	for wch != nil || pch != nil {
@@ -84,28 +88,32 @@ func (app Application) getResults(weatherOut <-chan network.Result[domain.Weathe
 		case res, ok := <-wch:
 			if !ok {
 				wch = nil
-				log.Println("wch is closed")
 				continue
 			}
+
 			if res.Err != nil {
 				return res.Err
 			}
 			if err := app.printer.Print(res.Value); err != nil {
 				return err
 			}
+
 		case res, ok := <-pch:
 			if !ok {
 				pch = nil
-				log.Println("pch is closed")
-
 				continue
 			}
+
 			if res.Err != nil {
 				return res.Err
 			}
-			if err := app.printer.Print(res.Value); err != nil {
-				return err
+
+			for _, r := range res.Value {
+				if err := app.printer.Print(r); err != nil {
+					return err
+				}
 			}
+
 		case <-weatherCtx.Done():
 			return weatherCtx.Err()
 		case <-placesInfoCtx.Done():

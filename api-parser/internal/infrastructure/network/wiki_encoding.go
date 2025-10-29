@@ -2,6 +2,7 @@ package network
 
 import (
 	"api-parser/internal/domain"
+	"api-parser/internal/infrastructure/network/utils"
 	"context"
 	"fmt"
 	"net/http"
@@ -9,8 +10,8 @@ import (
 	"strconv"
 )
 
-func ReadWikiDataAsync(ctx context.Context, client *http.Client, lat, lng float64) <-chan Result[domain.WikiGeosearchResp] {
-	out := make(chan Result[domain.WikiGeosearchResp], 1)
+func ReadWikiDataAsync(ctx context.Context, client *http.Client, lat, lng float64) <-chan utils.Result[domain.WikiGeoSearchResp] {
+	out := make(chan utils.Result[domain.WikiGeoSearchResp], 1)
 	go func() {
 		defer close(out)
 
@@ -18,7 +19,7 @@ func ReadWikiDataAsync(ctx context.Context, client *http.Client, lat, lng float6
 		q.Set("action", "query")
 		q.Set("list", "geosearch")
 		q.Set("gscoord", fmt.Sprintf("%f|%f", lat, lng))
-		q.Set("gsradius", strconv.Itoa(2000))
+		q.Set("gsradius", strconv.Itoa(1000))
 		q.Set("gslimit", strconv.Itoa(10))
 		q.Set("format", "json")
 
@@ -30,22 +31,22 @@ func ReadWikiDataAsync(ctx context.Context, client *http.Client, lat, lng float6
 
 		if err != nil {
 			select {
-			case out <- Result[domain.WikiGeosearchResp]{Err: err}:
+			case out <- utils.Result[domain.WikiGeoSearchResp]{Err: err}:
 			case <-ctx.Done():
 			}
 			return
 		}
 
-		var resp domain.WikiGeosearchResp
-		if err := doJSON(client, req, &resp); err != nil {
+		var resp domain.WikiGeoSearchResp
+		if err := utils.DoJSON(client, req, &resp); err != nil {
 			select {
-			case out <- Result[domain.WikiGeosearchResp]{Err: fmt.Errorf("wikipedia geosearch: %w", err)}:
+			case out <- utils.Result[domain.WikiGeoSearchResp]{Err: fmt.Errorf("wikipedia geosearch: %w", err)}:
 			case <-ctx.Done():
 			}
 		}
 
 		select {
-		case out <- Result[domain.WikiGeosearchResp]{Value: resp}:
+		case out <- utils.Result[domain.WikiGeoSearchResp]{Value: resp}:
 		case <-ctx.Done():
 		}
 	}()

@@ -1,4 +1,4 @@
-package network
+package utils
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ type Result[T any] struct {
 	Err   error
 }
 
-func doJSON(client *http.Client, request *http.Request, out any) error {
+func DoJSON(client *http.Client, request *http.Request, out any) error {
 	resp, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
