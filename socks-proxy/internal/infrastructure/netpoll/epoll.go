@@ -1,6 +1,10 @@
 package netpoll
 
-import "golang.org/x/sys/unix"
+import (
+	"errors"
+
+	"golang.org/x/sys/unix"
+)
 
 type EventMask uint32
 
@@ -12,8 +16,8 @@ const (
 )
 
 type Event struct {
-	Mask EventMask
-	FD   int
+	Events EventMask
+	FD     int
 }
 
 type Poller struct {
@@ -64,6 +68,29 @@ func (p *Poller) Del(fd int) error {
 	return nil
 }
 
+func (p *Poller) Wait(maxEvents int, timeoutMs int) ([]Event, error) {
+	if maxEvents <= 0 {
+		maxEvents = 1
+	}
+	rawEvents := make([]unix.EpollEvent, maxEvents)
+	n, err := unix.EpollWait(p.fd, rawEvents, timeoutMs)
+	if err != nil {
+		if errors.Is(err, unix.EINTR) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	events := make([]Event, 0, n)
+	for i := 0; i < n; i++ {
+		re := rawEvents[i]
+		events = append(events, Event{
+			Events: epollToMask(re.Events),
+			FD:     int(re.Fd),
+		})
+	}
+	return events, nil
+}
+
 func maskToEpoll(mask EventMask) uint32 {
 	var ev uint32
 	if mask&EventRead != 0 {
@@ -73,4 +100,21 @@ func maskToEpoll(mask EventMask) uint32 {
 		ev |= unix.EPOLLOUT
 	}
 	return ev
+}
+
+func epollToMask(ev uint32) EventMask {
+	var mask EventMask
+	if ev&unix.EPOLLIN != 0 {
+		mask |= EventRead
+	}
+	if ev&unix.EPOLLOUT != 0 {
+		mask |= EventWrite
+	}
+	if ev&unix.EPOLLHUP != 0 {
+		mask |= EventHup
+	}
+	if ev&unix.EPOLLERR != 0 {
+		mask |= EventError
+	}
+	return mask
 }
