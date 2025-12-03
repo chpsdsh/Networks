@@ -434,7 +434,7 @@ func (s *Server) processRequest(conn *domain.Connection) (bool, error) {
 		return false, errors.New("IPv6 not supported")
 	default:
 		resp := []byte{domain.SocksVersion5, domain.SocksAddrTypeNotSupported, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
-		_, _ = unix.Write(conn.ClientFD, resp)
+		_, _ = network.Write(conn.ClientFD, resp)
 		return false, errors.New("unknown address type")
 	}
 
@@ -452,7 +452,7 @@ func (s *Server) startConnectIPv4(conn *domain.Connection, ip [4]byte, port uint
 	s.connManager.AttachTarget(conn, targetFD)
 
 	if err := s.poller.Add(targetFD, netpoll.EventWrite|netpoll.EventError|netpoll.EventHup); err != nil {
-		_ = unix.Close(targetFD)
+		_ = network.Close(targetFD)
 		return err
 	}
 
@@ -685,9 +685,9 @@ func (s *Server) closeConnection(conn *domain.Connection) {
 		_ = s.poller.Del(conn.TargetFD)
 	}
 
-	_ = unix.Close(conn.ClientFD)
+	_ = network.Close(conn.ClientFD)
 	if conn.TargetFD >= 0 {
-		_ = unix.Close(conn.TargetFD)
+		_ = network.Close(conn.TargetFD)
 	}
 	s.connManager.DeleteConnection(conn)
 }
