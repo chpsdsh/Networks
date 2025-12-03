@@ -44,7 +44,7 @@ func RecvFromIPv4(fd int, buf []byte) (n int, err error) {
 	}
 	_, ok := sa.(*unix.SockaddrInet4)
 	if !ok {
-		return 0, errors.New("invalid SockaddrInet4")
+		return 0, errors.New("invalid socket address")
 	}
 	return n, nil
 }

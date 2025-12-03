@@ -83,7 +83,7 @@ func (s *Server) failConnection(conn *domain.Connection, reason string, conErr e
 	)
 
 	resp := []byte{
-		0x05,
+		domain.SocksVersion5,
 		0x01,
 		0x00,
 		0x01,
@@ -91,12 +91,12 @@ func (s *Server) failConnection(conn *domain.Connection, reason string, conErr e
 		0x00, 0x00,
 	}
 
-	_, _ = unix.Write(conn.ClientFD, resp)
+	_, _ = network.Write(conn.ClientFD, resp)
 
-	_ = unix.Close(conn.ClientFD)
+	_ = network.Close(conn.ClientFD)
 
 	if conn.TargetFD >= 0 {
-		_ = unix.Close(conn.TargetFD)
+		_ = network.Close(conn.TargetFD)
 	}
 
 	s.connManager.DeleteConnection(conn)
@@ -104,7 +104,7 @@ func (s *Server) failConnection(conn *domain.Connection, reason string, conErr e
 }
 
 func (s *Server) Start() error {
-	slog.Info("SOCKS5 proxy listening on 0.0.0.0:", s.port)
+	slog.Info("SOCKS5 proxy listening on 0.0.0.0", "port", s.port)
 	for {
 		events, err := s.poller.Wait(MaxEpollEvents, -1)
 		if err != nil {
@@ -143,7 +143,7 @@ func (s *Server) handleAccept() {
 		}
 
 		conn := s.connManager.NewClientConnection(clientFd)
-		slog.Info("new client ", clientFd, "connection:", conn.ID)
+		slog.Info("new client", "fd", clientFd, "connection", conn.ID)
 	}
 }
 
@@ -197,11 +197,10 @@ func (s *Server) handleFd(fd int, mask netpoll.EventMask) {
 		return
 	}
 
-	slog.Error("unknown fd and mask:", fd, mask)
+	slog.Error("unknown fd and mask:", "fd", fd, "mask", mask)
 }
 
 func (s *Server) handleClientEvent(conn *domain.Connection, mask netpoll.EventMask) {
-	fd := conn.ClientFD
 
 	if mask&netpoll.EventError != 0 || mask&netpoll.EventHup != 0 {
 		s.failConnection(conn, "client error/hup", errors.New("client error or hup"))
@@ -210,6 +209,14 @@ func (s *Server) handleClientEvent(conn *domain.Connection, mask netpoll.EventMa
 
 	if mask&netpoll.EventRead != 0 {
 		if err := s.handleClientReadable(conn); err != nil {
+			if errors.Is(err, io.EOF) {
+				slog.Info("client closed connection",
+					"connID", conn.ID,
+					"reason", "EOF",
+				)
+				s.closeConnection(conn)
+				return
+			}
 			s.failConnection(conn, "client read", err)
 			return
 		}
@@ -224,14 +231,13 @@ func (s *Server) handleClientEvent(conn *domain.Connection, mask netpoll.EventMa
 }
 
 func (s *Server) handleTargetEvent(conn *domain.Connection, mask netpoll.EventMask) {
-	fd := conn.TargetFD
 
 	if mask&netpoll.EventError != 0 || mask&netpoll.EventHup != 0 {
 		s.failConnection(conn, "target error/hup", errors.New("target error or hup"))
 		return
 	}
 
-	if conn.State == domain.StateConnectingTarget && (mask&netpoll.EventWrite) != 0 {
+	if conn.State == domain.StateConnectingTarget && mask&netpoll.EventWrite != 0 {
 		if err := s.finishTargetConnect(conn); err != nil {
 			s.failConnection(conn, "finish target connect", err)
 			return
@@ -261,7 +267,7 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 	for {
 		n, err := network.Read(conn.ClientFD, buf)
 		if n > 0 {
-			conn.ClientReaderBuf = append(conn.ClientReaderBuf, buf[:n]...)
+			conn.ToTargetBuf = append(conn.ToTargetBuf, buf[:n]...)
 		}
 
 		if err != nil {
@@ -277,7 +283,7 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 	}
 
 	for {
-		before := len(conn.ClientReaderBuf)
+		before := len(conn.ToTargetBuf)
 
 		switch conn.State {
 		case domain.StateGreeting:
@@ -299,9 +305,7 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 			}
 
 		case domain.StateRelaying:
-			if conn.TargetFD >= 0 && len(conn.ClientReaderBuf) > 0 {
-				conn.ToTargetBuf = append(conn.ToTargetBuf, conn.ClientReaderBuf...)
-				conn.ClientReaderBuf = nil
+			if conn.TargetFD >= 0 && len(conn.ToTargetBuf) > 0 {
 				return s.flushToTarget(conn)
 			}
 			return nil
@@ -310,7 +314,7 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 			return nil
 		}
 
-		if len(conn.ClientReaderBuf) == before {
+		if len(conn.ToTargetBuf) == before {
 			break
 		}
 	}
@@ -319,43 +323,43 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 }
 
 func (s *Server) processGreeting(conn *domain.Connection) (bool, error) {
-	buf := conn.ClientReaderBuf
+	buf := conn.ToTargetBuf
 	if len(buf) < 2 {
-		return false, nil // ждём хотя бы VER + NMETHODS
+		return false, nil
 	}
 
 	ver := buf[0]
 	nMethods := int(buf[1])
 
-	if ver != 0x05 {
+	if ver != domain.SocksVersion5 {
 		return false, errors.New("unsupported SOCKS version")
 	}
 
 	if len(buf) < 2+nMethods {
-		return false, nil // пришла только часть методов
+		return false, nil
 	}
 
 	methods := buf[2 : 2+nMethods]
 
 	supportsNoAuth := false
 	for _, m := range methods {
-		if m == 0x00 {
+		if m == domain.SocksNoAuth {
 			supportsNoAuth = true
 			break
 		}
 	}
 	if !supportsNoAuth {
-		resp := []byte{0x05, 0xFF}
-		_, _ = unix.Write(conn.ClientFD, resp)
+		resp := []byte{domain.SocksVersion5, domain.SocksNoAccessibleAuthMethod}
+		_, _ = network.Write(conn.ClientFD, resp)
 		return false, errors.New("no acceptable auth methods")
 	}
 
-	resp := []byte{0x05, 0x00}
-	if _, err := unix.Write(conn.ClientFD, resp); err != nil {
+	resp := []byte{domain.SocksVersion5, domain.SocksNoAuth}
+	if _, err := network.Write(conn.ClientFD, resp); err != nil {
 		return false, err
 	}
 
-	conn.ClientReaderBuf = buf[2+nMethods:]
+	conn.ToTargetBuf = buf[2+nMethods:]
 
 	conn.State = domain.StateRequest
 
@@ -363,32 +367,33 @@ func (s *Server) processGreeting(conn *domain.Connection) (bool, error) {
 }
 
 func (s *Server) processRequest(conn *domain.Connection) (bool, error) {
-	buf := conn.ClientReaderBuf
+	buf := conn.ToTargetBuf
 	if len(buf) < 4 {
 		return false, nil
 	}
 
 	ver := buf[0]
 	cmd := buf[1]
-	atyp := buf[3]
+	addrType := buf[3]
 
-	if ver != 0x05 {
+	if ver != domain.SocksVersion5 {
 		return false, errors.New("invalid VER in request")
 	}
-	if cmd != 0x01 {
-		resp := []byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
-		_, _ = unix.Write(conn.ClientFD, resp)
+
+	if cmd != domain.SocksEstablishTcpConnection {
+		resp := []byte{domain.SocksVersion5, domain.SocksCommandNotSupported, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+		_, _ = network.Write(conn.ClientFD, resp)
 		return false, errors.New("only CONNECT is supported")
 	}
 
 	offset := 4
 
 	var ip4 [4]byte
-	var domain string
+	var dom string
 	var port uint16
 
-	switch atyp {
-	case 0x01:
+	switch addrType {
+	case domain.SocksAddrTypeIPv4:
 		if len(buf) < offset+4+2 {
 			return false, nil
 		}
@@ -403,7 +408,7 @@ func (s *Server) processRequest(conn *domain.Connection) (bool, error) {
 			return false, err
 		}
 
-	case 0x03:
+	case domain.SocksAddrTypeDomain:
 		if len(buf) < offset+1 {
 			return false, nil
 		}
@@ -413,27 +418,27 @@ func (s *Server) processRequest(conn *domain.Connection) (bool, error) {
 		if len(buf) < offset+nameLen+2 {
 			return false, nil
 		}
-		domain = string(buf[offset : offset+nameLen])
+		dom = string(buf[offset : offset+nameLen])
 		offset += nameLen
 
 		port = binary.BigEndian.Uint16(buf[offset : offset+2])
 		offset += 2
 
-		if err := s.startDNSResolve(conn, domain, port); err != nil {
+		if err := s.startDNSResolve(conn, dom, port); err != nil {
 			return false, err
 		}
 
-	case 0x04:
-		resp := []byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
-		_, _ = unix.Write(conn.ClientFD, resp)
+	case domain.SocksAddrTypeIPv6:
+		resp := []byte{domain.SocksVersion5, domain.SocksAddrTypeNotSupported, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+		_, _ = network.Write(conn.ClientFD, resp)
 		return false, errors.New("IPv6 not supported")
 	default:
-		resp := []byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+		resp := []byte{domain.SocksVersion5, domain.SocksAddrTypeNotSupported, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
 		_, _ = unix.Write(conn.ClientFD, resp)
-		return false, errors.New("unknown ATYP")
+		return false, errors.New("unknown address type")
 	}
 
-	conn.ClientReaderBuf = buf[offset:]
+	conn.ToTargetBuf = buf[offset:]
 
 	return true, nil
 }
@@ -490,14 +495,14 @@ func (s *Server) finishTargetConnect(conn *domain.Connection) error {
 	}
 
 	resp := make([]byte, 10)
-	resp[0] = 0x05
+	resp[0] = domain.SocksVersion5
 	resp[1] = 0x00
 	resp[2] = 0x00
-	resp[3] = 0x01
+	resp[3] = domain.SocksAddrTypeIPv4
 	copy(resp[4:8], bndAddr[:])
 	binary.BigEndian.PutUint16(resp[8:10], uint16(bndPort))
 
-	if _, err := unix.Write(conn.ClientFD, resp); err != nil {
+	if _, err := network.Write(conn.ClientFD, resp); err != nil {
 		return err
 	}
 
@@ -516,4 +521,173 @@ func (s *Server) finishTargetConnect(conn *domain.Connection) error {
 	_ = s.poller.Mod(conn.TargetFD, targetMask)
 
 	return nil
+}
+
+func (s *Server) handleClientWritable(conn *domain.Connection) error {
+	if len(conn.ToClientBuf) == 0 {
+		s.updateClientPoller(conn)
+		return nil
+	}
+	return s.flushToClient(conn)
+}
+
+func (s *Server) handleTargetWritable(conn *domain.Connection) error {
+	if len(conn.ToTargetBuf) == 0 {
+		s.updateTargetPoller(conn)
+		return nil
+	}
+	return s.flushToTarget(conn)
+}
+
+func (s *Server) handleTargetReadable(conn *domain.Connection) error {
+	if conn.TargetReadClosed {
+		return nil
+	}
+
+	buf := make([]byte, 4096)
+
+	for {
+		n, err := network.Read(conn.TargetFD, buf)
+		if n > 0 {
+			conn.ToClientBuf = append(conn.ToClientBuf, buf[:n]...)
+		}
+
+		if err != nil {
+			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+				break
+			}
+			if err == io.EOF {
+				conn.TargetReadClosed = true
+				break
+			}
+			return err
+		}
+
+		if n == 0 {
+			conn.TargetReadClosed = true
+			break
+		}
+	}
+
+	if len(conn.ToClientBuf) > 0 {
+		if err := s.flushToClient(conn); err != nil {
+			return err
+		}
+	}
+
+	if conn.TargetReadClosed && len(conn.ToClientBuf) == 0 {
+		conn.ClientWriteClosed = true
+	}
+
+	if s.isFullyClosed(conn) {
+		s.closeConnection(conn)
+	}
+
+	return nil
+}
+
+func (s *Server) flushToTarget(conn *domain.Connection) error {
+	for len(conn.ToTargetBuf) > 0 {
+		n, err := network.Write(conn.TargetFD, conn.ToTargetBuf)
+		if n > 0 {
+			conn.ToTargetBuf = conn.ToTargetBuf[n:]
+		}
+
+		if err != nil {
+			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+				break
+			}
+			return err
+		}
+
+		if n == 0 {
+			break
+		}
+	}
+
+	s.updateTargetPoller(conn)
+
+	if conn.ClientReadClosed && len(conn.ToTargetBuf) == 0 && !conn.TargetWriteClosed {
+		conn.TargetWriteClosed = true
+	}
+
+	if s.isFullyClosed(conn) {
+		s.closeConnection(conn)
+	}
+
+	return nil
+}
+
+func (s *Server) flushToClient(conn *domain.Connection) error {
+	for len(conn.ToClientBuf) > 0 {
+		n, err := network.Write(conn.ClientFD, conn.ToClientBuf)
+		if n > 0 {
+			conn.ToClientBuf = conn.ToClientBuf[n:]
+		}
+
+		if err != nil {
+			if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+				break
+			}
+			return err
+		}
+
+		if n == 0 {
+			break
+		}
+	}
+
+	s.updateClientPoller(conn)
+
+	if conn.TargetReadClosed && len(conn.ToClientBuf) == 0 && !conn.ClientWriteClosed {
+		conn.ClientWriteClosed = true
+	}
+
+	if s.isFullyClosed(conn) {
+		s.closeConnection(conn)
+	}
+
+	return nil
+}
+
+func (s *Server) updateClientPoller(conn *domain.Connection) {
+	mask := netpoll.EventRead | netpoll.EventError | netpoll.EventHup
+	if len(conn.ToClientBuf) > 0 {
+		mask |= netpoll.EventWrite
+	}
+	_ = s.poller.Mod(conn.ClientFD, mask)
+}
+
+func (s *Server) updateTargetPoller(conn *domain.Connection) {
+	mask := netpoll.EventRead | netpoll.EventError | netpoll.EventHup
+	if len(conn.ToTargetBuf) > 0 {
+		mask |= netpoll.EventWrite
+	}
+	_ = s.poller.Mod(conn.TargetFD, mask)
+}
+
+func (s *Server) isFullyClosed(conn *domain.Connection) bool {
+	if !conn.ClientReadClosed || !conn.TargetReadClosed {
+		return false
+	}
+	if !conn.ClientWriteClosed || !conn.TargetWriteClosed {
+		return false
+	}
+	if len(conn.ToClientBuf) != 0 || len(conn.ToTargetBuf) != 0 {
+		return false
+	}
+	return true
+}
+
+func (s *Server) closeConnection(conn *domain.Connection) {
+	_ = s.poller.Del(conn.ClientFD)
+	if conn.TargetFD >= 0 {
+		_ = s.poller.Del(conn.TargetFD)
+	}
+
+	_ = unix.Close(conn.ClientFD)
+	if conn.TargetFD >= 0 {
+		_ = unix.Close(conn.TargetFD)
+	}
+	s.connManager.DeleteConnection(conn)
 }

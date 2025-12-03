@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"socks-proxy/internal/application"
 	"strconv"
 )
 
@@ -13,5 +14,13 @@ func main() {
 		slog.Error("invalid port argument: ", err.Error())
 		os.Exit(1)
 	}
-	
+	server, err := application.NewServer(port)
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+	if err := server.Start(); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
 }

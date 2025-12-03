@@ -8,22 +8,19 @@ const (
 	StateResolvingDNS
 	StateConnectingTarget
 	StateRelaying
-	StateClosing
 )
 
 type Connection struct {
 	ID int
-	
+
 	ClientFD int
 	TargetFD int
 
 	State State
 
-	ClientReaderBuf []byte
-	ToTargetBuf     []byte
+	ToTargetBuf []byte
 
-	TargetReaderBuf []byte
-	ToClientBuf     []byte
+	ToClientBuf []byte
 
 	ClientReadClosed  bool
 	ClientWriteClosed bool
