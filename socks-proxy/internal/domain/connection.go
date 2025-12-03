@@ -19,13 +19,7 @@ type Connection struct {
 	State State
 
 	ToTargetBuf []byte
-
 	ToClientBuf []byte
-
-	ClientReadClosed  bool
-	ClientWriteClosed bool
-	TargetReadClosed  bool
-	TargetWriteClosed bool
 
 	PendingDomain string
 	PendingPort   uint16
