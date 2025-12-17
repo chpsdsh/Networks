@@ -13,8 +13,12 @@ const (
 type Connection struct {
 	ID int
 
-	ClientFD int
-	TargetFD int
+	ClientFD          int
+	TargetFD          int
+	ClientReadClosed  bool
+	ClientWriteClosed bool
+	TargetReadClosed  bool
+	TargetWriteClosed bool
 
 	State State
 

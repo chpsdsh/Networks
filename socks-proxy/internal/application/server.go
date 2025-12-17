@@ -215,11 +215,6 @@ func (s *Server) handleClientEvent(conn *domain.Connection, mask netpoll.EventMa
 		return
 	}
 
-	if mask&netpoll.EventHup != 0 {
-		s.closeConnection(conn)
-		return
-	}
-
 	if mask&netpoll.EventRead != 0 {
 		if err := s.handleClientReadable(conn); err != nil {
 			s.failConnection(conn, "client read", err)
@@ -245,11 +240,6 @@ func (s *Server) handleTargetEvent(conn *domain.Connection, mask netpoll.EventMa
 		} else {
 			s.failConnection(conn, "target error", errors.New("EPOLLERR but SO_ERROR=0"))
 		}
-		return
-	}
-
-	if mask&netpoll.EventHup != 0 {
-		s.closeConnection(conn)
 		return
 	}
 
@@ -292,6 +282,11 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 		if errors.Is(err, io.EOF) && n == 0 {
 			_ = unix.Shutdown(conn.ClientFD, unix.SHUT_RD)
 			_ = unix.Shutdown(conn.TargetFD, unix.SHUT_WR)
+			conn.ClientReadClosed = true
+			conn.TargetWriteClosed = true
+			if conn.ClientWriteClosed && conn.TargetReadClosed {
+				s.closeConnection(conn)
+			}
 			return nil
 		}
 		return err
@@ -300,6 +295,11 @@ func (s *Server) handleClientReadable(conn *domain.Connection) error {
 	if n == 0 {
 		_ = unix.Shutdown(conn.ClientFD, unix.SHUT_RD)
 		_ = unix.Shutdown(conn.TargetFD, unix.SHUT_WR)
+		conn.ClientReadClosed = true
+		conn.TargetWriteClosed = true
+		if conn.ClientWriteClosed && conn.TargetReadClosed {
+			s.closeConnection(conn)
+		}
 		return nil
 	}
 
@@ -568,6 +568,11 @@ func (s *Server) handleTargetReadable(conn *domain.Connection) error {
 		if errors.Is(err, io.EOF) && n == 0 {
 			_ = unix.Shutdown(conn.ClientFD, unix.SHUT_WR)
 			_ = unix.Shutdown(conn.TargetFD, unix.SHUT_RD)
+			conn.ClientWriteClosed = true
+			conn.TargetReadClosed = true
+			if conn.ClientReadClosed && conn.TargetWriteClosed {
+				s.closeConnection(conn)
+			}
 			return nil
 		}
 		return err
@@ -576,6 +581,11 @@ func (s *Server) handleTargetReadable(conn *domain.Connection) error {
 	if n == 0 {
 		_ = unix.Shutdown(conn.ClientFD, unix.SHUT_WR)
 		_ = unix.Shutdown(conn.TargetFD, unix.SHUT_RD)
+		conn.ClientWriteClosed = true
+		conn.TargetReadClosed = true
+		if conn.ClientReadClosed && conn.TargetWriteClosed {
+			s.closeConnection(conn)
+		}
 	}
 
 	if len(conn.ToClientBuf) > 0 {
